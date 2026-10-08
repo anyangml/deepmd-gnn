@@ -9,6 +9,7 @@ from types import ModuleType
 from typing import Any
 
 import torch
+from ase.data import atomic_numbers as ase_atomic_numbers
 
 ENERGY_STATE_PREFIXES = ("final.", "normalizer.")
 MAX_GRAPH_CONV_BLOCKS = 8
@@ -28,6 +29,17 @@ _MODEL_ARG_KEYS = (
     "max_z",
     "threebody_cutoff",
 )
+
+
+def atomic_numbers_from_type_map(type_map: list[str]) -> list[int]:
+    """Map DeePMD type symbols onto MatterSim nuclear charges."""
+    numbers: list[int] = []
+    for symbol in type_map:
+        if symbol not in ase_atomic_numbers:
+            msg = f"MatterSim type_map entry {symbol!r} is not an element"
+            raise ValueError(msg)
+        numbers.append(int(ase_atomic_numbers[symbol]))
+    return numbers
 
 
 def _load_forcefield_namespace() -> None:
@@ -78,6 +90,23 @@ def _import_m3gnet_modules() -> tuple[Any, Any, Any, Any]:
             )
             raise ImportError(msg) from exc
     return MLP, MainBlock, SmoothBesselBasis, SphericalBasisLayer
+
+
+def _import_gated_mlp() -> Any:  # noqa: ANN401
+    """Import the official M3GNet GatedMLP energy readout."""
+    try:
+        from mattersim.forcefield.m3gnet.modules import GatedMLP  # noqa: PLC0415
+    except ImportError:
+        _load_forcefield_namespace()
+        try:
+            from mattersim.forcefield.m3gnet.modules import GatedMLP  # noqa: PLC0415
+        except ImportError as exc:
+            msg = (
+                "MatterSim energy fitting requires the optional extra: "
+                'pip install "deepmd-gnn[mattersim]"'
+            )
+            raise ImportError(msg) from exc
+    return GatedMLP
 
 
 def _dtype_from_name(name: str) -> torch.dtype:
@@ -312,6 +341,53 @@ class MatterSimFeatureBackbone(torch.nn.Module):
         return features
 
 
+class MatterSimAtomScaling(torch.nn.Module):
+    """Per-element energy scale/shift without AtomScaling's training-set deps."""
+
+    def __init__(self, max_z: int) -> None:
+        super().__init__()
+        self.max_z = int(max_z)
+        self.register_buffer("scale", torch.ones(self.max_z + 1))
+        self.register_buffer("shift", torch.zeros(self.max_z + 1))
+
+    def forward(
+        self,
+        atomic_energies: torch.Tensor,
+        atomic_numbers: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply pretrained per-Z scale and shift."""
+        index = atomic_numbers.long()
+        return self.scale[index] * atomic_energies + self.shift[index]
+
+
+class MatterSimEnergyHead(torch.nn.Module):
+    """Original M3GNet GatedMLP energy readout and AtomScaling."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__()
+        gated_mlp = _import_gated_mlp()
+        persistable = persistable_checkpoint_config(config)
+        units = int(persistable["units"])
+        max_z = int(persistable["max_z"])
+        self.units = units
+        self.max_z = max_z
+        self.final = gated_mlp(
+            in_dim=units,
+            out_dims=[units, units, 1],
+            activation=["swish", "swish", None],
+        )
+        self.normalizer = MatterSimAtomScaling(max_z)
+
+    def node_energy(
+        self,
+        features: torch.Tensor,
+        atomic_numbers: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return per-atom energies from last-layer atom_attr."""
+        raw = self.final(features).reshape(-1)
+        return self.normalizer(raw, atomic_numbers)
+
+
 def build_mattersim_feature_backbone(
     config: dict[str, Any],
     *,
@@ -337,6 +413,38 @@ def load_native_mattersim_feature_backbone(
         allow_energy_keys=True,
     )
     return backbone, persistable
+
+
+def build_mattersim_energy_head(
+    config: dict[str, Any],
+    *,
+    device: str | torch.device,
+) -> MatterSimEnergyHead:
+    """Rebuild the original energy readout from persisted constructor metadata."""
+    persistable = persistable_checkpoint_config(config)
+    dtype = _dtype_from_name(persistable["source_dtype"])
+    return MatterSimEnergyHead(persistable).to(device=device, dtype=dtype)
+
+
+def load_native_mattersim_energy_head(
+    model_path: str | Path,
+    *,
+    device: str | torch.device,
+) -> tuple[MatterSimEnergyHead, dict[str, Any]]:
+    """Load the original GatedMLP energy readout from a trusted checkpoint."""
+    payload = _load_raw_mattersim_payload(model_path)
+    persistable = _config_from_payload(payload)
+    head = build_mattersim_energy_head(persistable, device=device)
+    energy_state = {
+        key: value
+        for key, value in payload["model"].items()
+        if key.startswith(ENERGY_STATE_PREFIXES)
+    }
+    if not energy_state:
+        msg = "MatterSim checkpoint does not contain a GatedMLP energy readout"
+        raise ValueError(msg)
+    validate_mattersim_state_dict_load(head.load_state_dict(energy_state, strict=False))
+    return head, persistable
 
 
 def validate_mattersim_state_dict_load(

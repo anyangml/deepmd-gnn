@@ -7,7 +7,6 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import torch
-from ase.data import atomic_numbers as ase_atomic_numbers
 from deepmd.pt.model.descriptor.base_descriptor import BaseDescriptor
 from deepmd.pt.utils import env
 from deepmd.pt.utils.utils import to_numpy_array, to_torch_tensor
@@ -15,6 +14,7 @@ from deepmd.utils.version import check_version_compatibility
 
 import deepmd_gnn.op  # noqa: F401
 from deepmd_gnn.mattersim_checkpoint import (
+    atomic_numbers_from_type_map,
     build_mattersim_feature_backbone,
     compute_threebody_indices,
     load_mattersim_checkpoint_config,
@@ -30,17 +30,6 @@ if TYPE_CHECKING:
 
     from deepmd.utils.data_system import DeepmdDataSystem
     from deepmd.utils.path import DPPath
-
-
-def _atomic_numbers_from_type_map(type_map: list[str]) -> list[int]:
-    """Map DeePMD type symbols onto MatterSim nuclear charges."""
-    numbers: list[int] = []
-    for symbol in type_map:
-        if symbol not in ase_atomic_numbers:
-            msg = f"MatterSim descriptor type_map entry {symbol!r} is not an element"
-            raise ValueError(msg)
-        numbers.append(int(ase_atomic_numbers[symbol]))
-    return numbers
 
 
 @BaseDescriptor.register("mattersim")
@@ -82,7 +71,7 @@ class MatterSimDescriptor(BaseDescriptor, torch.nn.Module):
         self.type_map = list(type_map)
         self.ntypes = len(self.type_map)
         self.trainable = bool(trainable)
-        self.type_to_z = _atomic_numbers_from_type_map(self.type_map)
+        self.type_to_z = atomic_numbers_from_type_map(self.type_map)
         self.model_path: str | None = None
         resolved = (
             None

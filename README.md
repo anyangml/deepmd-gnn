@@ -526,7 +526,8 @@ An example input is under [examples/property/sevennet](examples/property/sevenne
 MatterSim-v1 is wired as a **property descriptor**, not as a standalone energy
 model for LAMMPS/MPI. The M3GNet backbone stays trainable and is composed with
 DeePMD-kit's standard `PropertyFittingNet`. The original GatedMLP energy
-readout and `AtomScaling` head are not used. Install the optional extra first
+readout and `AtomScaling` head are dropped from the descriptor and restored
+only by `mattersim_ener`. Install the optional extra first
 (Python 3.12+; MatterSim also pulls `e3nn>=0.5`, so use a separate environment
 from MACE stacks that pin `e3nn` 0.4):
 
@@ -562,7 +563,55 @@ cutoff stored in the checkpoint (5 Å for the public MatterSim-v1 weights).
 }
 ```
 
-An example input is under [examples/property/mattersim](examples/property/mattersim).
+The same descriptor can also keep the original M3GNet energy head as a DeePMD
+fitting (`mattersim_ener`) and share the backbone with a property branch. This
+is the DPA-style workflow: one pretrained GNN, the native GatedMLP plus
+`AtomScaling` readout on energy data, and `PropertyFittingNet` on last-layer
+`atom_attr`. It is not a second MLP on the property features, and it does not
+add a LAMMPS `type: mattersim` energy model. See
+[`examples/property/mattersim/input_multitask.json`](examples/property/mattersim/input_multitask.json):
+
+```json
+"model": {
+  "shared_dict": {
+    "type_map": ["H", "O"],
+    "mattersim_descriptor": {
+      "type": "mattersim",
+      "model_path": "./trusted_mattersim_m3gnet.pth",
+      "sel": 64,
+      "trainable": true
+    }
+  },
+  "model_dict": {
+    "force_field": {
+      "type_map": "type_map",
+      "descriptor": "mattersim_descriptor",
+      "fitting_net": {
+        "type": "mattersim_ener",
+        "model_path": "./trusted_mattersim_m3gnet.pth"
+      }
+    },
+    "band_gap": {
+      "type_map": "type_map",
+      "descriptor": "mattersim_descriptor",
+      "fitting_net": {
+        "type": "property",
+        "property_name": "band_gap",
+        "task_dim": 1,
+        "intensive": true
+      }
+    }
+  }
+}
+```
+
+Set `intensive: true` on the property fitting when labels are per-structure
+(for example band gaps). After `share_params` level 0 the two branches use the
+same backbone object; energy readouts stay only on `mattersim_ener`. Energy data
+and property data are listed separately under `training.data_dict`.
+
+An example property-only input is under
+[examples/property/mattersim](examples/property/mattersim).
 
 ## DPRc support
 

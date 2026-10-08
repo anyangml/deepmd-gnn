@@ -77,7 +77,7 @@ def sevennet(session: nox.Session) -> None:
 
 @nox.session
 def mattersim(session: nox.Session) -> None:
-    """Run MatterSim descriptor tests without MACE's e3nn pin."""
+    """Run MatterSim descriptor and energy-fitting tests without MACE's e3nn pin."""
     # MatterSim's full extra pulls pymatgen, phonopy, torch_geometric, Azure,
     # and wandb. The property descriptor only needs the M3GNet modules.
     session.install("mattersim", "--no-deps")
@@ -94,6 +94,7 @@ def mattersim(session: nox.Session) -> None:
     session.run(
         "pytest",
         "tests/test_mattersim_descriptor.py",
+        "tests/test_mattersim_ener.py",
         "-m",
         "not slow",
         "--cov",

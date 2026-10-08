@@ -21,6 +21,7 @@ pytest.importorskip("mattersim")
 
 from deepmd_gnn.mattersim_checkpoint import (
     ENERGY_STATE_PREFIXES,
+    MatterSimEnergyHead,
     MatterSimFeatureBackbone,
     _dtype_from_name,
     _infer_state_dtype,
@@ -54,8 +55,7 @@ def _write_mattersim_checkpoint(
     backbone = MatterSimFeatureBackbone(TINY_ARGS)
     state = dict(backbone.state_dict())
     if extra_energy:
-        state["final.g.0.linear.weight"] = torch.zeros(8, 8)
-        state["normalizer.scale"] = torch.ones(11)
+        state.update(MatterSimEnergyHead(TINY_ARGS).state_dict())
     torch.save(
         {
             "model_name": model_name,
