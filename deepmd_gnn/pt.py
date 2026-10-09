@@ -266,13 +266,11 @@ def _install_mace_ener_model_wrapper() -> None:
 
     def init_with_mace_configs(
         self: Any,  # noqa: ANN401
-        model: Any,  # noqa: ANN401
-        loss: Any = None,  # noqa: ANN401
-        model_params: dict[str, Any] | None = None,
-        shared_links: dict[str, Any] | None = None,
-        modifier: Any = None,  # noqa: ANN401
+        *args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
     ) -> None:
-        original_init(self, model, loss, model_params, shared_links, modifier)
+        # DeePMD 3.1 ModelWrapper has no modifier; 3.2+ does. Forward as-is.
+        original_init(self, *args, **kwargs)
         _persist_mace_runtime_configs(self.model, self.model_params)
 
     def extra_state_with_mace_configs(self: Any) -> dict[str, Any]:  # noqa: ANN401
